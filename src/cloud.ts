@@ -173,11 +173,11 @@ export async function saveCloudProfile(userId: string, name: string, email: stri
     if (previousPath) await supabase.storage.from('profile-photos').remove([previousPath]);
   }
   const cleanUsername = username?.trim().replace(/^@/, '').toLowerCase().replace(/[^a-z0-9_]/g, '');
-  const { error } = await supabase.from('profiles').upsert({ user_id: userId, display_name: name.trim(), email, username: cleanUsername || null, discoverable, avatar_path: avatarPath || null, updated_at: new Date().toISOString() });
+  const { data: savedProfile, error } = await supabase.from('profiles').upsert({ user_id: userId, display_name: name.trim(), email, username: cleanUsername || null, discoverable, avatar_path: avatarPath || null, updated_at: new Date().toISOString() }).select('username,discoverable').single();
   if (error) throw error;
   await supabase.auth.updateUser({ data: { full_name: name.trim() } });
   const avatar = avatarPath ? (await supabase.storage.from('profile-photos').createSignedUrl(avatarPath, 60 * 60 * 12)).data?.signedUrl : undefined;
-  return { name: name.trim(), email, username: cleanUsername || '', discoverable, avatar, avatarPath };
+  return { name: name.trim(), email, username: savedProfile?.username || '', discoverable: savedProfile?.discoverable !== false, avatar, avatarPath };
 }
 
 export async function loadCloudProfile(userId: string, email: string) {
