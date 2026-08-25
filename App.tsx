@@ -14,7 +14,7 @@ import QRCode from 'react-native-qrcode-svg';
 import QRCodeGenerator from 'qrcode';
 import type { Session } from '@supabase/supabase-js';
 import { completeMobileSignIn, isCloudConfigured, supabase } from './src/supabase';
-import { acceptCloudInvite, createCloudHousehold, createCloudInvite, deleteCloudItem, loadCloudInventory, loadCloudProfile, loadHouseholdMembers, saveCloudProfile, saveCloudTote, type CloudMember } from './src/cloud';
+import { acceptCloudInvite, createCloudHousehold, createCloudInvite, deleteCloudItem, loadCloudInventory, loadCloudProfile, loadHouseholdMembers, replaceCloudPhoto, saveCloudProfile, saveCloudTote, type CloudMember } from './src/cloud';
 
 type Household = { id: string; name: string; color: string; members: number; role?: string };
 type Item = { id: string; name: string; quantity: string; notes: string; image?: string; imagePath?: string };
@@ -45,13 +45,30 @@ async function choosePhoto(): Promise<string | undefined> {
   return new Promise(resolve => {
     const image = document.createElement('img');
     image.onload = () => {
-      const scale = Math.min(1, 1200 / Math.max(image.naturalWidth, image.naturalHeight));
+      const scale = Math.min(1, 720 / Math.max(image.naturalWidth, image.naturalHeight));
       const canvas = document.createElement('canvas'); canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale);
       canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', .62));
+      resolve(canvas.toDataURL('image/jpeg', .5));
     };
     image.onerror = () => resolve(source); image.src = source;
   });
+}
+
+async function compressedPhotoBlob(url: string): Promise<Blob> {
+  const original = await (await fetch(url)).blob();
+  const objectUrl = URL.createObjectURL(original);
+  try {
+    return await new Promise((resolve, reject) => {
+      const image = document.createElement('img');
+      image.onload = () => {
+        const scale = Math.min(1, 720 / Math.max(image.naturalWidth, image.naturalHeight));
+        const canvas = document.createElement('canvas'); canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale);
+        canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Could not compress photo')), 'image/jpeg', .5);
+      };
+      image.onerror = () => reject(new Error('Could not read photo')); image.src = objectUrl;
+    });
+  } finally { URL.revokeObjectURL(objectUrl); }
 }
 
 export default function App() {
@@ -132,6 +149,25 @@ export default function App() {
     }).catch((error: any) => Alert.alert('Could not join household', error.message));
   }, [session?.user.id]);
   useEffect(() => { if (loaded && identity && !session) AsyncStorage.setItem(`${STORAGE_KEY}-${identity}`, JSON.stringify(totes)).catch(() => {}); }, [totes, loaded, identity, session]);
+
+  useEffect(() => {
+    if (!loaded || !session || Platform.OS !== 'web' || !totes.length) return;
+    const key = `totehome-photo-optimization-v1-${session.user.id}`;
+    AsyncStorage.getItem(key).then(async done => {
+      if (done) return;
+      const photos = totes.flatMap(t => [{ path: t.imagePath, url: t.image }, ...t.items.map(i => ({ path: i.imagePath, url: i.image }))]).filter((p): p is { path: string; url: string } => !!p.path && !!p.url);
+      for (const photo of photos) {
+        try { await replaceCloudPhoto('tote-photos', photo.path, await compressedPhotoBlob(photo.url)); } catch { /* Another household member may own this file. */ }
+      }
+      await AsyncStorage.setItem(key, 'done');
+    }).catch(() => {});
+  }, [loaded, session?.user.id, totes.length]);
+
+  useEffect(() => {
+    if (!session || Platform.OS !== 'web' || !profile.avatarPath || !profile.avatar) return;
+    const key = `totehome-profile-photo-optimization-v1-${session.user.id}`;
+    AsyncStorage.getItem(key).then(async done => { if (done) return; await replaceCloudPhoto('profile-photos', profile.avatarPath!, await compressedPhotoBlob(profile.avatar!)); await AsyncStorage.setItem(key, 'done'); }).catch(() => {});
+  }, [session?.user.id, profile.avatarPath]);
 
   async function saveTote(tote: Tote) {
     setTotes(all => all.map(t => t.id === tote.id ? tote : t)); setSelected(tote);
@@ -240,7 +276,7 @@ function Stat({ icon, value, label }: { icon: keyof typeof Ionicons.glyphMap; va
 function ToteCard({ tote, open }: { tote: Tote; open: () => void }) {
   return <Pressable style={({ pressed }) => [s.toteCard, pressed && { opacity: .7 }]} onPress={open}>
     <View style={[s.toteNumber, { backgroundColor: tote.color }]}>
-      {tote.image ? <><Image source={{ uri: tote.image }} style={s.cardImage} /><View style={s.photoNumber}><Text style={s.photoNumberText}>{String(tote.number).padStart(2, '0')}</Text></View></> : <><Text style={s.toteSmall}>TOTE</Text><Text style={s.toteNum}>{String(tote.number).padStart(2, '0')}</Text></>}
+      <Text style={s.toteSmall}>TOTE</Text><Text style={s.toteNum}>{String(tote.number).padStart(2, '0')}</Text>
     </View>
     <View style={{ flex: 1 }}><Text style={s.toteTitle}>{tote.title}</Text><View style={s.metaRow}><Ionicons name="location-outline" size={14} color={C.muted} /><Text style={s.meta}>{tote.location}{tote.detail ? ` · ${tote.detail}` : ''}</Text></View><Text style={s.preview} numberOfLines={1}>{tote.items.map(i => i.name).join(', ') || 'No items added yet'}</Text></View><Ionicons name="chevron-forward" size={20} color="#A9B3B0" />
   </Pressable>;

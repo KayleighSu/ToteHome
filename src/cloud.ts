@@ -15,6 +15,14 @@ async function signedPhoto(path?: string | null) {
   return data?.signedUrl;
 }
 
+async function signedPhotos(paths: (string | null | undefined)[]) {
+  if (!supabase) return new Map<string, string>();
+  const unique = Array.from(new Set(paths.filter((path): path is string => !!path)));
+  if (!unique.length) return new Map<string, string>();
+  const { data } = await supabase.storage.from('tote-photos').createSignedUrls(unique, 60 * 60 * 12);
+  return new Map<string, string>((data || []).filter((entry): entry is typeof entry & { path: string; signedUrl: string } => !!entry.path && !!entry.signedUrl).map(entry => [entry.path, entry.signedUrl]));
+}
+
 async function uploadPhoto(userId: string, householdId: string, value?: string, previousPath?: string) {
   if (!value || !supabase) return previousPath;
   if (!value.startsWith('data:') && !value.startsWith('blob:') && !value.startsWith('file:')) return previousPath || value;
@@ -28,7 +36,7 @@ async function uploadPhoto(userId: string, householdId: string, value?: string, 
   return path;
 }
 
-async function mapTote(row: any): Promise<CloudTote> {
+async function mapTote(row: any, photoMap?: Map<string, string>): Promise<CloudTote> {
   const itemRows = row.items || [];
   return {
     id: row.id,
@@ -39,7 +47,7 @@ async function mapTote(row: any): Promise<CloudTote> {
     detail: row.location_detail || '',
     color: row.color || palette[row.tote_number % palette.length],
     imagePath: row.image_url || undefined,
-    image: await signedPhoto(row.image_url),
+    image: photoMap ? photoMap.get(row.image_url) : await signedPhoto(row.image_url),
     updatedAt: new Date(row.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
     items: await Promise.all(itemRows.map(async (item: any) => ({
       id: item.id,
@@ -47,7 +55,7 @@ async function mapTote(row: any): Promise<CloudTote> {
       quantity: item.quantity || '1',
       notes: item.notes || '',
       imagePath: item.image_url || undefined,
-      image: await signedPhoto(item.image_url),
+      image: photoMap ? photoMap.get(item.image_url) : await signedPhoto(item.image_url),
     }))),
   };
 }
@@ -63,7 +71,9 @@ export async function loadCloudInventory() {
   const households = base.map((house, index) => ({ ...house, color: palette[index % palette.length], members: (memberCounts || []).filter((m: any) => m.household_id === house.id).length }));
   const { data: rows, error } = await supabase.from('totes').select('*, locations(name), items(*)').in('household_id', ids).order('updated_at', { ascending: false });
   if (error) throw error;
-  return { households, totes: await Promise.all((rows || []).map(mapTote)) };
+  const allPaths = (rows || []).flatMap((row: any) => [row.image_url, ...(row.items || []).map((item: any) => item.image_url)]);
+  const photoMap = await signedPhotos(allPaths);
+  return { households, totes: await Promise.all((rows || []).map((row: any) => mapTote(row, photoMap))) };
 }
 
 async function locationId(householdId: string, name: string) {
@@ -110,6 +120,12 @@ export async function deleteCloudItem(itemId: string, imagePath?: string) {
   const { error } = await supabase.from('items').delete().eq('id', itemId);
   if (error) throw error;
   if (imagePath) await supabase.storage.from('tote-photos').remove([imagePath]);
+}
+
+export async function replaceCloudPhoto(bucket: 'tote-photos' | 'profile-photos', path: string, blob: Blob) {
+  if (!supabase) throw new Error('Cloud connection unavailable');
+  const { error } = await supabase.storage.from(bucket).update(path, blob, { contentType: 'image/jpeg', cacheControl: '3600', upsert: true });
+  if (error) throw error;
 }
 
 export async function createCloudHousehold(name: string) {
