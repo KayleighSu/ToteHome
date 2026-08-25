@@ -14,7 +14,7 @@ import QRCode from 'react-native-qrcode-svg';
 import QRCodeGenerator from 'qrcode';
 import type { Session } from '@supabase/supabase-js';
 import { completeMobileSignIn, isCloudConfigured, supabase } from './src/supabase';
-import { acceptCloudInvite, createCloudHousehold, createCloudInvite, deleteCloudItem, loadCloudInventory, loadHouseholdMembers, saveCloudProfile, saveCloudTote, type CloudMember } from './src/cloud';
+import { acceptCloudInvite, createCloudHousehold, createCloudInvite, deleteCloudItem, loadCloudInventory, loadCloudProfile, loadHouseholdMembers, saveCloudProfile, saveCloudTote, type CloudMember } from './src/cloud';
 
 type Household = { id: string; name: string; color: string; members: number; role?: string };
 type Item = { id: string; name: string; quantity: string; notes: string; image?: string; imagePath?: string };
@@ -71,6 +71,7 @@ export default function App() {
   const [label, setLabel] = useState<Tote | null>(null);
   const [labelSize, setLabelSize] = useState<LabelSize>('medium');
   const [profile, setProfile] = useState<{ name: string; avatar?: string; avatarPath?: string }>({ name: '' });
+  const [locationOrder, setLocationOrder] = useState<string[]>([]);
   const identity = session?.user.id || (localPreview ? 'local-preview' : null);
   const house = households.find(h => h.id === householdId) || households[0] || fallbackHouseholds[0];
   const visibleTotes = totes.filter(t => t.householdId === householdId);
@@ -99,7 +100,13 @@ export default function App() {
     if (!identity) return;
     AsyncStorage.getItem(`totehome-label-size-${identity}`).then(value => { if (value === 'small' || value === 'medium' || value === 'large') setLabelSize(value); });
     setProfile({ name: String(session?.user.user_metadata?.full_name || session?.user.email?.split('@')[0] || 'ToteHome user') });
+    if (session) loadCloudProfile(session.user.id, session.user.email || '').then(setProfile).catch(() => {});
   }, [identity, session?.user.user_metadata?.full_name]);
+
+  useEffect(() => {
+    if (!identity || !householdId) return;
+    AsyncStorage.getItem(`totehome-location-order-${identity}-${householdId}`).then(value => setLocationOrder(value ? JSON.parse(value) : [])).catch(() => setLocationOrder([]));
+  }, [identity, householdId]);
 
   useEffect(() => {
     if (!identity) { setTotes([]); setLoaded(false); return; }
@@ -154,7 +161,7 @@ export default function App() {
   return <SafeAreaView style={s.safe}><StatusBar style="dark" /><View style={s.app}>
     <Header household={house} onHouse={() => setHousePicker(true)} onScan={() => setScanner(true)} />
     <View style={s.content}>
-      {tab === 'home' && <Home household={house} totes={visibleTotes} open={setSelected} all={() => setTab('totes')} add={() => setAddTote(true)} />}
+      {tab === 'home' && <Home household={house} totes={visibleTotes} locationOrder={locationOrder} reorder={async order => { setLocationOrder(order); if (identity) await AsyncStorage.setItem(`totehome-location-order-${identity}-${householdId}`, JSON.stringify(order)); }} open={setSelected} add={() => setAddTote(true)} />}
       {tab === 'totes' && <Totes totes={visibleTotes} open={setSelected} add={() => setAddTote(true)} />}
       {tab === 'search' && <Search totes={totes} households={households} open={t => { setHouseholdId(t.householdId); setSelected(t); }} />}
       {tab === 'settings' && <Settings household={house} totes={visibleTotes} email={session?.user.email || 'Local preview'} profile={profile} labelSize={labelSize} setLabelSize={async size => { setLabelSize(size); if (identity) await AsyncStorage.setItem(`totehome-label-size-${identity}`, size); }} openTote={setSelected} invite={session && house.role === 'owner' ? async email => { const token = await createCloudInvite(house.id, email); const link = `${window.location.origin}/ToteHome/?invite=${token}`; const message = `You’re invited to join ${house.name} in ToteHome. Open this link, create or sign into your account, then in Safari tap Share → Add to Home Screen: ${link}`; if (navigator.share) await navigator.share({ title: `Join ${house.name} on ToteHome`, text: message, url: link }); else { await navigator.clipboard?.writeText(message); Alert.alert('Invitation copied', 'Send the copied message to the person you invited.'); } } : undefined} loadMembers={session ? () => loadHouseholdMembers(house.id) : undefined} saveProfile={session ? async (name, image) => { const saved = await saveCloudProfile(session.user.id, name, session.user.email || '', image, profile.avatarPath); setProfile(saved); } : undefined} signOut={async () => { if (supabase && session) await supabase.auth.signOut(); setLocalPreview(false); }} deleteAccount={session ? async () => { if (!supabase) return; const { error } = await supabase.rpc('delete_current_user'); if (error) return Alert.alert('Could not delete account', error.message); await AsyncStorage.removeItem(`${STORAGE_KEY}-${session.user.id}`); await supabase.auth.signOut(); setTotes([]); } : undefined} />}
@@ -220,11 +227,14 @@ function Tutorial({ visible, skip, addFirst }: { visible: boolean; skip: () => v
   return <Modal visible={visible} animationType="fade" transparent><View style={s.tutorialBackdrop}><View style={s.tutorialCard}><Pressable style={s.skipTutorial} onPress={skip}><Text style={s.skipText}>Skip tutorial</Text></Pressable><View style={s.tutorialIcon}><Ionicons name={page.icon} size={38} color={C.teal} /></View><Text style={s.tutorialTitle}>{page.title}</Text><Text style={s.tutorialBody}>{page.body}</Text><View style={s.dots}>{pages.map((_, i) => <View key={i} style={[s.dot, i === step && s.dotOn]} />)}</View>{step < pages.length - 1 ? <Pressable style={s.fullPrimary} onPress={() => setStep(step + 1)}><Text style={s.primaryText}>Next</Text></Pressable> : <Pressable style={s.fullPrimary} onPress={addFirst}><Ionicons name="add" size={20} color="#fff" /><Text style={s.primaryText}>Add my first tote</Text></Pressable>}</View></View></Modal>;
 }
 
-function Home({ household, totes, open, all, add }: { household: Household; totes: Tote[]; open: (t: Tote) => void; all: () => void; add: () => void }) {
+function Home({ household, totes, locationOrder, reorder, open, add }: { household: Household; totes: Tote[]; locationOrder: string[]; reorder: (order: string[]) => void; open: (t: Tote) => void; add: () => void }) {
   const items = totes.reduce((n, t) => n + t.items.length, 0), locations = new Set(totes.map(t => t.location)).size;
+  const found = Array.from(new Set(totes.map(t => t.location)));
+  const ordered = [...locationOrder.filter(name => found.includes(name)), ...found.filter(name => !locationOrder.includes(name))];
+  function move(name: string, direction: -1 | 1) { const next = [...ordered], index = next.indexOf(name), target = index + direction; if (target < 0 || target >= next.length) return; [next[index], next[target]] = [next[target], next[index]]; reorder(next); }
   return <ScrollView contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}><View style={s.hero}><Text style={s.eyebrow}>EVERYTHING IN ITS PLACE</Text><Text style={s.heroTitle}>Find it without{`\n`}opening a single tote.</Text><Text style={s.heroText}>{totes.length} totes and {items} items organized at {household.name.toLowerCase()}.</Text><Pressable style={s.primary} onPress={add}><Ionicons name="add" size={21} color="#fff" /><Text style={s.primaryText}>Add a tote</Text></Pressable></View>
     <View style={s.stats}><Stat icon="cube-outline" value={totes.length} label="Totes" /><Stat icon="list-outline" value={items} label="Items" /><Stat icon="location-outline" value={locations} label="Locations" /></View>
-    <View style={s.sectionHead}><Text style={s.sectionTitle}>Recently updated</Text><Pressable onPress={all}><Text style={s.link}>See all</Text></Pressable></View>{totes.slice(0, 3).map(t => <ToteCard key={t.id} tote={t} open={() => open(t)} />)}{!totes.length && <Empty add={add} />}</ScrollView>;
+    <View style={s.sectionHead}><Text style={s.sectionTitle}>Storage areas</Text><Text style={s.reorderHint}>Use arrows to rearrange</Text></View>{ordered.map((location, index) => <View key={location} style={s.areaSection}><View style={s.areaHeader}><View style={s.areaTitleWrap}><Ionicons name="location" size={18} color={C.teal} /><Text style={s.areaTitle}>{location}</Text><Text style={s.count}>{totes.filter(t => t.location === location).length}</Text></View><View style={s.areaArrows}><Pressable style={[s.areaArrow, index === 0 && { opacity: .3 }]} disabled={index === 0} onPress={() => move(location, -1)}><Ionicons name="arrow-up" size={18} color={C.teal} /></Pressable><Pressable style={[s.areaArrow, index === ordered.length - 1 && { opacity: .3 }]} disabled={index === ordered.length - 1} onPress={() => move(location, 1)}><Ionicons name="arrow-down" size={18} color={C.teal} /></Pressable></View></View>{totes.filter(t => t.location === location).map(t => <ToteCard key={t.id} tote={t} open={() => open(t)} />)}</View>)}{!totes.length && <Empty add={add} />}</ScrollView>;
 }
 function Stat({ icon, value, label }: { icon: keyof typeof Ionicons.glyphMap; value: number; label: string }) { return <View style={s.stat}><Ionicons name={icon} size={19} color={C.teal} /><Text style={s.statValue}>{value}</Text><Text style={s.statLabel}>{label}</Text></View>; }
 function ToteCard({ tote, open }: { tote: Tote; open: () => void }) {
@@ -335,7 +345,7 @@ function LabelSheet({ tote, household, close, size }: { tote: Tote | null; house
   const active = tote;
   const house = household;
   const payload = `totehome://tote/${active.id}`;
-  const dimensions = size === 'small' ? { width: 3.65, height: 2.25, qr: 1.35, columns: '1in 1fr 1.45in', number: 42, title: 14, gap: .12 } : size === 'large' ? { width: 7.55, height: 6.8, qr: 3.2, columns: '1.7in 1fr 3.35in', number: 76, title: 26, gap: .3 } : { width: 7.55, height: 3.25, qr: 2.15, columns: '1.55in 1fr 2.3in', number: 62, title: 21, gap: .28 };
+  const dimensions = size === 'small' ? { width: 3.65, height: 2.25, qr: 1.02, columns: '.7in minmax(0,1fr) 1.08in', number: 32, title: 10, gap: .06, padding: .12, tote: 8, location: 8 } : size === 'large' ? { width: 7.55, height: 6.8, qr: 3.2, columns: '1.7in 1fr 3.35in', number: 76, title: 26, gap: .3, padding: .3, tote: 14, location: 13 } : { width: 7.55, height: 3.25, qr: 2.15, columns: '1.55in 1fr 2.3in', number: 62, title: 21, gap: .28, padding: .3, tote: 14, location: 13 };
 
   async function create() {
     try {
@@ -367,14 +377,14 @@ function LabelSheet({ tote, household, close, size }: { tote: Tote | null; house
         .toolbar .print { background: #ed805f; }
         .instructions { margin: 0 0 .22in; color: #667874; font-size: 10pt; text-align: center; }
         .sheet { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .25in; }
-        .label { position: relative; width: ${dimensions.width}in; height: ${dimensions.height}in; border: 3px solid #18332f; border-radius: .18in; padding: .22in; display: grid; grid-template-columns: ${dimensions.columns}; align-items: center; gap: ${dimensions.gap}in; overflow: hidden; page-break-inside: avoid; }
+        .label { position: relative; width: ${dimensions.width}in; height: ${dimensions.height}in; border: 3px solid #18332f; border-radius: .18in; padding: ${dimensions.padding}in; display: grid; grid-template-columns: ${dimensions.columns}; align-items: center; gap: ${dimensions.gap}in; overflow: hidden; page-break-inside: avoid; }
         .label:before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: .14in; background: #147d6f; }
         .copy { position: absolute; top: .12in; right: .16in; color: #71817d; font-size: 8pt; font-weight: bold; letter-spacing: 1.3px; }
         .number-block { text-align: center; border-right: 2px solid #dce4e1; padding-right: .25in; }
-        .tote-word { color: #147d6f; font-size: 14pt; font-weight: 900; letter-spacing: 4px; }
+        .tote-word { color: #147d6f; font-size: ${dimensions.tote}pt; font-weight: 900; letter-spacing: 2px; }
         .number { font-size: ${dimensions.number}pt; line-height: .95; font-weight: 900; }
         .title { font-size: ${dimensions.title}pt; line-height: 1.05; font-weight: 900; margin-bottom: .12in; }
-        .location { font-size: 13pt; line-height: 1.35; font-weight: 700; color: #52645f; }
+        .details { min-width: 0; overflow: hidden; } .location { font-size: ${dimensions.location}pt; line-height: 1.25; font-weight: 700; color: #52645f; overflow-wrap: anywhere; }
         .qr { display: block; width: ${dimensions.qr}in; height: ${dimensions.qr}in; justify-self: end; image-rendering: pixelated; }
         @media print { .toolbar, .instructions { display: none; } .sheet { padding-top: .05in; } }
       </style></head><body><nav class="toolbar"><button onclick="window.close(); setTimeout(()=>history.back(),100)">← Back to ToteHome</button><button class="print" onclick="window.print()">Print labels</button></nav><p class="instructions">Print at 100% scale, then cut around each border.</p><main class="sheet">${label('TOP LABEL')}${label('SIDE LABEL')}</main><script>window.onload=()=>setTimeout(()=>window.print(),250);</script></body></html>`;
@@ -430,4 +440,5 @@ const s = StyleSheet.create({
   sizeOption: { backgroundColor: '#fff', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: C.line, marginBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sizeOptionOn: { borderColor: C.teal, backgroundColor: '#F2FAF7' },
   printNote: { backgroundColor: C.pale, padding: 15, borderRadius: 15, flexDirection: 'row', gap: 11, marginTop: 10, marginBottom: 8 }, printNoteText: { flex: 1, color: C.ink, fontSize: 12, lineHeight: 18 }, printHint: { color: C.muted, fontSize: 12, lineHeight: 18, textAlign: 'center', marginBottom: 14 },
   moveOption: { backgroundColor: '#fff', minHeight: 45, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: C.line, marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, deleteItemButton: { height: 44, marginTop: 18, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' },
+  reorderHint: { color: C.muted, fontSize: 10, fontWeight: '700' }, areaSection: { marginBottom: 12 }, areaHeader: { minHeight: 45, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, areaTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 7 }, areaTitle: { color: C.ink, fontSize: 17, fontWeight: '900' }, areaArrows: { flexDirection: 'row', gap: 6 }, areaArrow: { width: 34, height: 34, borderRadius: 11, backgroundColor: '#fff', borderWidth: 1, borderColor: C.line, alignItems: 'center', justifyContent: 'center' },
 });

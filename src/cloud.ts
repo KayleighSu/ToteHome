@@ -160,3 +160,15 @@ export async function saveCloudProfile(userId: string, name: string, email: stri
   const avatar = avatarPath ? (await supabase.storage.from('profile-photos').createSignedUrl(avatarPath, 60 * 60 * 12)).data?.signedUrl : undefined;
   return { name: name.trim(), email, avatar, avatarPath };
 }
+
+export async function loadCloudProfile(userId: string, email: string) {
+  if (!supabase) throw new Error('Cloud connection unavailable');
+  const { data, error } = await supabase.from('profiles').select('display_name,email,avatar_path').eq('user_id', userId).maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    const name = String((await supabase.auth.getUser()).data.user?.user_metadata?.full_name || email.split('@')[0] || 'ToteHome user');
+    return saveCloudProfile(userId, name, email);
+  }
+  const avatar = data.avatar_path ? (await supabase.storage.from('profile-photos').createSignedUrl(data.avatar_path, 60 * 60 * 12)).data?.signedUrl : undefined;
+  return { name: data.display_name || email.split('@')[0] || 'ToteHome user', email: data.email || email, avatar, avatarPath: data.avatar_path || undefined };
+}
