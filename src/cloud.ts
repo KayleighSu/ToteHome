@@ -5,6 +5,7 @@ export type CloudHousehold = { id: string; name: string; color: string; members:
 export type CloudItem = { id: string; name: string; quantity: string; notes: string; stored?: boolean; image?: string; imagePath?: string };
 export type CloudTote = { id: string; householdId: string; number: number; title: string; location: string; detail: string; color: string; image?: string; imagePath?: string; items: CloudItem[]; updatedAt: string };
 export type CloudMember = { userId: string; name: string; email: string; role: string; avatar?: string; avatarPath?: string };
+export type CloudPerson = { userId: string; name: string; username: string; avatar?: string };
 
 const palette = ['#79A9A0', '#B99BC6', '#ED805F', '#EAB65B'];
 const isUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -161,7 +162,7 @@ export async function loadHouseholdMembers(householdId: string): Promise<CloudMe
   })));
 }
 
-export async function saveCloudProfile(userId: string, name: string, email: string, image?: string, previousPath?: string) {
+export async function saveCloudProfile(userId: string, name: string, email: string, image?: string, previousPath?: string, username?: string, discoverable = true) {
   if (!supabase) throw new Error('Cloud connection unavailable');
   let avatarPath = previousPath;
   if (image?.startsWith('data:')) {
@@ -171,21 +172,36 @@ export async function saveCloudProfile(userId: string, name: string, email: stri
     if (error) throw error;
     if (previousPath) await supabase.storage.from('profile-photos').remove([previousPath]);
   }
-  const { error } = await supabase.from('profiles').upsert({ user_id: userId, display_name: name.trim(), email, avatar_path: avatarPath || null, updated_at: new Date().toISOString() });
+  const cleanUsername = username?.trim().replace(/^@/, '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+  const { error } = await supabase.from('profiles').upsert({ user_id: userId, display_name: name.trim(), email, username: cleanUsername || null, discoverable, avatar_path: avatarPath || null, updated_at: new Date().toISOString() });
   if (error) throw error;
   await supabase.auth.updateUser({ data: { full_name: name.trim() } });
   const avatar = avatarPath ? (await supabase.storage.from('profile-photos').createSignedUrl(avatarPath, 60 * 60 * 12)).data?.signedUrl : undefined;
-  return { name: name.trim(), email, avatar, avatarPath };
+  return { name: name.trim(), email, username: cleanUsername || '', discoverable, avatar, avatarPath };
 }
 
 export async function loadCloudProfile(userId: string, email: string) {
   if (!supabase) throw new Error('Cloud connection unavailable');
-  const { data, error } = await supabase.from('profiles').select('display_name,email,avatar_path').eq('user_id', userId).maybeSingle();
+  const { data, error } = await supabase.from('profiles').select('display_name,email,username,discoverable,avatar_path').eq('user_id', userId).maybeSingle();
   if (error) throw error;
   if (!data) {
     const name = String((await supabase.auth.getUser()).data.user?.user_metadata?.full_name || email.split('@')[0] || 'ToteHome user');
     return saveCloudProfile(userId, name, email);
   }
   const avatar = data.avatar_path ? (await supabase.storage.from('profile-photos').createSignedUrl(data.avatar_path, 60 * 60 * 12)).data?.signedUrl : undefined;
-  return { name: data.display_name || email.split('@')[0] || 'ToteHome user', email: data.email || email, avatar, avatarPath: data.avatar_path || undefined };
+  return { name: data.display_name || email.split('@')[0] || 'ToteHome user', email: data.email || email, username: data.username || '', discoverable: data.discoverable !== false, avatar, avatarPath: data.avatar_path || undefined };
+}
+
+export async function searchToteHomePeople(query: string): Promise<CloudPerson[]> {
+  if (!supabase || query.trim().length < 2) return [];
+  const { data, error } = await supabase.rpc('search_totehome_people', { search_text: query.trim() });
+  if (error) throw error;
+  return Promise.all((data || []).map(async (row: any) => ({ userId: row.user_id, name: row.display_name || 'ToteHome user', username: row.username || '', avatar: row.avatar_path ? (await supabase!.storage.from('profile-photos').createSignedUrl(row.avatar_path, 60 * 60)).data?.signedUrl : undefined })));
+}
+
+export async function createCloudInviteForUser(householdId: string, userId: string) {
+  if (!supabase) throw new Error('Cloud connection unavailable');
+  const { data, error } = await supabase.rpc('create_household_invite_for_user', { target_household: householdId, target_user: userId });
+  if (error) throw error;
+  return data as string;
 }
