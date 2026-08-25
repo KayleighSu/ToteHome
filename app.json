@@ -1,13 +1,18 @@
 {
   "expo": {
     "name": "ToteHome",
-    "slug": "ToteHome",
+    "slug": "totehome",
+    "scheme": "totehome",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.totehome.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "ToteHome uses the camera to scan QR labels on your storage totes."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -16,10 +21,29 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.totehome.app"
     },
     "web": {
-      "favicon": "./assets/favicon.png"
-    }
+      "favicon": "./assets/favicon.png",
+      "name": "ToteHome",
+      "shortName": "ToteHome",
+      "themeColor": "#18332F",
+      "backgroundColor": "#F7F5EE"
+    },
+    "experiments": {
+      "baseUrl": "/ToteHome"
+    },
+    "plugins": [
+      "expo-sharing",
+      "expo-status-bar",
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "ToteHome lets you optionally add photos of totes and their contents."
+        }
+      ]
+    ]
   }
 }

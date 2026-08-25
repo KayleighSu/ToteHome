@@ -1,0 +1,14 @@
+{
+  "name": "ToteHome",
+  "short_name": "ToteHome",
+  "description": "Know exactly where everything lives.",
+  "start_url": "/ToteHome/",
+  "scope": "/ToteHome/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F7F5EE",
+  "theme_color": "#18332F",
+  "icons": [
+    { "src": "/ToteHome/totehome-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
