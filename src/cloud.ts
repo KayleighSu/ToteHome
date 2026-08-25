@@ -2,7 +2,7 @@ import * as Crypto from 'expo-crypto';
 import { supabase } from './supabase';
 
 export type CloudHousehold = { id: string; name: string; color: string; members: number; role?: string };
-export type CloudItem = { id: string; name: string; quantity: string; notes: string; image?: string; imagePath?: string };
+export type CloudItem = { id: string; name: string; quantity: string; notes: string; stored?: boolean; image?: string; imagePath?: string };
 export type CloudTote = { id: string; householdId: string; number: number; title: string; location: string; detail: string; color: string; image?: string; imagePath?: string; items: CloudItem[]; updatedAt: string };
 export type CloudMember = { userId: string; name: string; email: string; role: string; avatar?: string; avatarPath?: string };
 
@@ -54,6 +54,7 @@ async function mapTote(row: any, photoMap?: Map<string, string>): Promise<CloudT
       name: item.name,
       quantity: item.quantity || '1',
       notes: item.notes || '',
+      stored: item.is_stored !== false,
       imagePath: item.image_url || undefined,
       image: photoMap ? photoMap.get(item.image_url) : await signedPhoto(item.image_url),
     }))),
@@ -101,7 +102,7 @@ export async function saveCloudTote(userId: string, tote: CloudTote) {
   }
   for (const item of tote.items) {
     const itemPath = await uploadPhoto(userId, tote.householdId, item.image, item.imagePath);
-    const itemRecord = { tote_id: toteId, name: item.name, quantity: item.quantity, notes: item.notes || null, image_url: itemPath || null };
+    const itemRecord = { tote_id: toteId, name: item.name, quantity: item.quantity, notes: item.notes || null, image_url: itemPath || null, is_stored: item.stored !== false };
     if (isUuid(item.id)) {
       const { error } = await supabase.from('items').update(itemRecord).eq('id', item.id);
       if (error) throw error;
