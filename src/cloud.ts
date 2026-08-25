@@ -4,6 +4,7 @@ import { supabase } from './supabase';
 export type CloudHousehold = { id: string; name: string; color: string; members: number; role?: string };
 export type CloudItem = { id: string; name: string; quantity: string; notes: string; image?: string; imagePath?: string };
 export type CloudTote = { id: string; householdId: string; number: number; title: string; location: string; detail: string; color: string; image?: string; imagePath?: string; items: CloudItem[]; updatedAt: string };
+export type CloudMember = { userId: string; name: string; email: string; role: string; avatar?: string; avatarPath?: string };
 
 const palette = ['#79A9A0', '#B99BC6', '#ED805F', '#EAB65B'];
 const isUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -122,4 +123,33 @@ export async function acceptCloudInvite(token: string) {
   if (!supabase) throw new Error('Cloud connection unavailable');
   const { error } = await supabase.rpc('accept_household_invite', { invite_token: token });
   if (error) throw error;
+}
+
+export async function loadHouseholdMembers(householdId: string): Promise<CloudMember[]> {
+  if (!supabase) return [];
+  const client = supabase;
+  const { data, error } = await client.rpc('list_household_members', { target_household: householdId });
+  if (error) throw error;
+  return Promise.all((data || []).map(async (row: any) => ({
+    userId: row.user_id, name: row.display_name || 'Household member', email: row.email || '', role: row.role,
+    avatarPath: row.avatar_path || undefined,
+    avatar: row.avatar_path ? (await client.storage.from('profile-photos').createSignedUrl(row.avatar_path, 60 * 60 * 12)).data?.signedUrl : undefined,
+  })));
+}
+
+export async function saveCloudProfile(userId: string, name: string, email: string, image?: string, previousPath?: string) {
+  if (!supabase) throw new Error('Cloud connection unavailable');
+  let avatarPath = previousPath;
+  if (image?.startsWith('data:')) {
+    const blob = await (await fetch(image)).blob();
+    avatarPath = `${userId}/${Crypto.randomUUID()}.jpg`;
+    const { error } = await supabase.storage.from('profile-photos').upload(avatarPath, blob, { contentType: blob.type || 'image/jpeg' });
+    if (error) throw error;
+    if (previousPath) await supabase.storage.from('profile-photos').remove([previousPath]);
+  }
+  const { error } = await supabase.from('profiles').upsert({ user_id: userId, display_name: name.trim(), email, avatar_path: avatarPath || null, updated_at: new Date().toISOString() });
+  if (error) throw error;
+  await supabase.auth.updateUser({ data: { full_name: name.trim() } });
+  const avatar = avatarPath ? (await supabase.storage.from('profile-photos').createSignedUrl(avatarPath, 60 * 60 * 12)).data?.signedUrl : undefined;
+  return { name: name.trim(), email, avatar, avatarPath };
 }
