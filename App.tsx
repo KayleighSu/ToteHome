@@ -169,7 +169,9 @@ function AuthScreen({ onPreview }: { onPreview: () => void }) {
     setBusy(true);
     try {
       if (mode === 'signup') {
-        const redirectTo = Platform.OS === 'web' ? window.location.origin : 'totehome://auth/callback';
+        const redirectTo = Platform.OS === 'web'
+          ? new URL(window.location.pathname.startsWith('/ToteHome') ? '/ToteHome/' : '/', window.location.origin).toString()
+          : 'totehome://auth/callback';
         const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { full_name: name.trim() }, emailRedirectTo: redirectTo } });
         if (error) throw error;
         if (!data.session) setConfirmationSent(true);
