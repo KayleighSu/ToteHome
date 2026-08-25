@@ -342,6 +342,9 @@ function LabelSheet({ tote, household, close, size }: { tote: Tote | null; house
         @page { size: letter portrait; margin: .45in; }
         * { box-sizing: border-box; }
         body { margin: 0; color: #18332f; background: white; font-family: Arial, Helvetica, sans-serif; }
+        .toolbar { position: sticky; top: 0; z-index: 5; display: flex; justify-content: center; gap: 10px; padding: 12px; background: #f7f5ee; border-bottom: 1px solid #e3e6df; }
+        .toolbar button { border: 0; border-radius: 10px; padding: 11px 16px; color: white; background: #147d6f; font-size: 15px; font-weight: 700; cursor: pointer; }
+        .toolbar .print { background: #ed805f; }
         .instructions { margin: 0 0 .22in; color: #667874; font-size: 10pt; text-align: center; }
         .sheet { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .25in; }
         .label { position: relative; width: ${dimensions.width}in; height: ${dimensions.height}in; border: 3px solid #18332f; border-radius: .18in; padding: .22in; display: grid; grid-template-columns: ${dimensions.columns}; align-items: center; gap: ${dimensions.gap}in; overflow: hidden; page-break-inside: avoid; }
@@ -353,8 +356,8 @@ function LabelSheet({ tote, household, close, size }: { tote: Tote | null; house
         .title { font-size: ${dimensions.title}pt; line-height: 1.05; font-weight: 900; margin-bottom: .12in; }
         .location { font-size: 13pt; line-height: 1.35; font-weight: 700; color: #52645f; }
         .qr { display: block; width: ${dimensions.qr}in; height: ${dimensions.qr}in; justify-self: end; image-rendering: pixelated; }
-        @media print { .instructions { display: none; } .sheet { padding-top: .05in; } }
-      </style></head><body><p class="instructions">Print at 100% scale, then cut around each border.</p><main class="sheet">${label('TOP LABEL')}${label('SIDE LABEL')}</main><script>window.onload=()=>setTimeout(()=>window.print(),250);</script></body></html>`;
+        @media print { .toolbar, .instructions { display: none; } .sheet { padding-top: .05in; } }
+      </style></head><body><nav class="toolbar"><button onclick="window.close(); setTimeout(()=>history.back(),100)">← Back to ToteHome</button><button class="print" onclick="window.print()">Print labels</button></nav><p class="instructions">Print at 100% scale, then cut around each border.</p><main class="sheet">${label('TOP LABEL')}${label('SIDE LABEL')}</main><script>window.onload=()=>setTimeout(()=>window.print(),250);</script></body></html>`;
 
       if (Platform.OS === 'web') {
         const printWindow = window.open('', '_blank');
