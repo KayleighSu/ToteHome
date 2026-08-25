@@ -14,7 +14,7 @@ import QRCode from 'react-native-qrcode-svg';
 import QRCodeGenerator from 'qrcode';
 import type { Session } from '@supabase/supabase-js';
 import { completeMobileSignIn, isCloudConfigured, supabase } from './src/supabase';
-import { acceptCloudInvite, createCloudHousehold, createCloudInvite, loadCloudInventory, loadHouseholdMembers, saveCloudProfile, saveCloudTote, type CloudMember } from './src/cloud';
+import { acceptCloudInvite, createCloudHousehold, createCloudInvite, deleteCloudItem, loadCloudInventory, loadHouseholdMembers, saveCloudProfile, saveCloudTote, type CloudMember } from './src/cloud';
 
 type Household = { id: string; name: string; color: string; members: number; role?: string };
 type Item = { id: string; name: string; quantity: string; notes: string; image?: string; imagePath?: string };
@@ -35,12 +35,23 @@ async function choosePhoto(): Promise<string | undefined> {
     mediaTypes: ImagePicker.MediaTypeOptions.Images,
     allowsEditing: true,
     aspect: [4, 3],
-    quality: 0.65,
+    quality: 0.38,
     base64: true,
   });
   if (result.canceled || !result.assets[0]) return undefined;
   const asset = result.assets[0];
-  return asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : asset.uri;
+  const source = asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : asset.uri;
+  if (Platform.OS !== 'web') return source;
+  return new Promise(resolve => {
+    const image = document.createElement('img');
+    image.onload = () => {
+      const scale = Math.min(1, 1200 / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement('canvas'); canvas.width = Math.round(image.naturalWidth * scale); canvas.height = Math.round(image.naturalHeight * scale);
+      canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', .62));
+    };
+    image.onerror = () => resolve(source); image.src = source;
+  });
 }
 
 export default function App() {
@@ -131,7 +142,7 @@ export default function App() {
   if (authLoading) return <LoadingScreen />;
   if (!session && !localPreview) return <AuthScreen onPreview={() => setLocalPreview(true)} />;
   if (!loaded) return <LoadingScreen />;
-  if (selected) return <ToteDetail tote={selected} household={households.find(h => h.id === selected.householdId) || house} onBack={() => setSelected(null)} onSave={saveTote} onLabel={() => setLabel(selected)} label={label} closeLabel={() => setLabel(null)} labelSize={labelSize} />;
+  if (selected) return <ToteDetail tote={selected} household={households.find(h => h.id === selected.householdId) || house} householdTotes={totes.filter(t => t.householdId === selected.householdId)} onBack={() => setSelected(null)} onSave={saveTote} onDeleteItem={async item => { if (session) await deleteCloudItem(item.id, item.imagePath); const updated = { ...selected, items: selected.items.filter(i => i.id !== item.id), updatedAt: 'Today' }; setTotes(all => all.map(t => t.id === updated.id ? updated : t)); setSelected(updated); }} onMoveItem={async (item, targetId) => { const target = totes.find(t => t.id === targetId); if (!target) return; const sourceUpdated = { ...selected, items: selected.items.filter(i => i.id !== item.id), updatedAt: 'Today' }; const targetUpdated = { ...target, items: [...target.items, item], updatedAt: 'Today' }; if (session) await saveCloudTote(session.user.id, targetUpdated); setTotes(all => all.map(t => t.id === sourceUpdated.id ? sourceUpdated : t.id === targetUpdated.id ? targetUpdated : t)); setSelected(sourceUpdated); }} onLabel={() => setLabel(selected)} label={label} closeLabel={() => setLabel(null)} labelSize={labelSize} />;
 
   async function finishTutorial(addFirst = false) {
     const identity = session?.user.id || 'local-preview';
@@ -236,16 +247,17 @@ function Search({ totes, households, open }: { totes: Tote[]; households: Househ
     {!query && <Info icon="sparkles-outline" title="A place for everything" body="Search item names and notes. We’ll show the household, location, and exact tote." />}{query ? <Text style={s.resultCount}>{results.length} {results.length === 1 ? 'match' : 'matches'}</Text> : null}{results.map(({ tote, item }) => <Pressable key={item.id} style={s.result} onPress={() => open(tote)}><View style={s.resultIcon}><Ionicons name="cube-outline" size={22} color={C.teal} /></View><View style={{ flex: 1 }}><Text style={s.resultName}>{item.name}</Text><Text style={s.resultMeta}>Tote {String(tote.number).padStart(2, '0')} · {tote.location}</Text><Text style={s.resultHouse}>{households.find(h => h.id === tote.householdId)?.name}</Text></View><Ionicons name="arrow-forward" size={19} color={C.teal} /></Pressable>)}{query && !results.length ? <Info title="Nothing found yet" body="Try a shorter phrase, or add the item to a tote." /> : null}</ScrollView>;
 }
 
-function ToteDetail({ tote, household, onBack, onSave, onLabel, label, closeLabel, labelSize }: { tote: Tote; household: Household; onBack: () => void; onSave: (t: Tote) => void; onLabel: () => void; label: Tote | null; closeLabel: () => void; labelSize: LabelSize }) {
+function ToteDetail({ tote, household, householdTotes, onBack, onSave, onDeleteItem, onMoveItem, onLabel, label, closeLabel, labelSize }: { tote: Tote; household: Household; householdTotes: Tote[]; onBack: () => void; onSave: (t: Tote) => void; onDeleteItem: (item: Item) => Promise<void>; onMoveItem: (item: Item, targetId: string) => Promise<void>; onLabel: () => void; label: Tote | null; closeLabel: () => void; labelSize: LabelSize }) {
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<Item | null>(null);
   async function addTotePhoto() { const image = await choosePhoto(); if (image) onSave({ ...tote, image, updatedAt: 'Today' }); }
   return <SafeAreaView style={s.safe}><StatusBar style="dark" /><View style={s.detailHeader}><Pressable style={s.iconButton} onPress={onBack}><Ionicons name="arrow-back" size={23} color={C.ink} /></Pressable><Text style={s.headerTitle}>Tote details</Text><Pressable style={s.iconButton} onPress={onLabel}><Ionicons name="qr-code-outline" size={22} color={C.teal} /></Pressable></View><ScrollView contentContainerStyle={s.detailScroll}>
     {tote.image ? <Pressable onPress={addTotePhoto}><Image source={{ uri: tote.image }} style={s.detailPhoto} /><View style={s.changePhoto}><Ionicons name="camera" size={16} color="#fff" /><Text style={s.changePhotoText}>Change photo</Text></View></Pressable> : null}
     <View style={[s.detailHero, { backgroundColor: tote.color }]}><Text style={s.detailLabel}>TOTE</Text><Text style={s.detailNumber}>{String(tote.number).padStart(2, '0')}</Text><View style={s.qrMini}><QRCode value={`totehome://tote/${tote.id}`} size={62} color={C.ink} /></View></View>
     {!tote.image && <Pressable style={s.photoPrompt} onPress={addTotePhoto}><Ionicons name="camera-outline" size={19} color={C.teal} /><Text style={s.photoPromptText}>Add an optional tote photo</Text></Pressable>}
     <Text style={s.detailTitle}>{tote.title}</Text><View style={s.detailLocation}><Ionicons name="location" size={19} color={C.teal} /><Text style={s.locationText}>{tote.location}{tote.detail ? ` · ${tote.detail}` : ''}</Text></View><Pressable style={s.labelButton} onPress={onLabel}><Ionicons name="print-outline" size={20} color={C.teal} /><Text style={s.labelText}>Create & print labels</Text></Pressable><View style={s.sectionHead}><Text style={s.sectionTitle}>Inside this tote</Text><Text style={s.count}>{tote.items.length}</Text></View>
-    {tote.items.map(i => <View key={i.id} style={s.item}>{i.image ? <Image source={{ uri: i.image }} style={s.itemImage} /> : <View style={s.check}><Ionicons name="checkmark" size={14} color={C.teal} /></View>}<View style={{ flex: 1 }}><Text style={s.itemName}>{i.name}</Text>{i.notes ? <Text style={s.itemNotes}>{i.notes}</Text> : null}</View><Text style={s.quantity}>{i.quantity}</Text></View>)}
-    {!tote.items.length && <Text style={s.emptyItems}>Nothing listed yet. Add the first item so it can be found later.</Text>}<Pressable style={s.addItem} onPress={() => setAdding(true)}><Ionicons name="add-circle-outline" size={21} color={C.teal} /><Text style={s.addItemText}>Add an item</Text></Pressable></ScrollView><AddItem visible={adding} close={() => setAdding(false)} add={item => { onSave({ ...tote, items: [...tote.items, item], updatedAt: 'Today' }); setAdding(false); }} /><LabelSheet tote={label} household={household} close={closeLabel} size={labelSize} /></SafeAreaView>;
+    {tote.items.map(i => <Pressable key={i.id} style={s.item} onPress={() => setEditing(i)}>{i.image ? <Image source={{ uri: i.image }} style={s.itemImage} /> : <View style={s.check}><Ionicons name="checkmark" size={14} color={C.teal} /></View>}<View style={{ flex: 1 }}><Text style={s.itemName}>{i.name}</Text>{i.notes ? <Text style={s.itemNotes}>{i.notes}</Text> : null}</View><Text style={s.quantity}>{i.quantity}</Text><Ionicons name="create-outline" size={18} color={C.teal} /></Pressable>)}
+    {!tote.items.length && <Text style={s.emptyItems}>Nothing listed yet. Add the first item so it can be found later.</Text>}<Pressable style={s.addItem} onPress={() => setAdding(true)}><Ionicons name="add-circle-outline" size={21} color={C.teal} /><Text style={s.addItemText}>Add an item</Text></Pressable></ScrollView><AddItem visible={adding} close={() => setAdding(false)} add={item => { onSave({ ...tote, items: [...tote.items, item], updatedAt: 'Today' }); setAdding(false); }} /><EditItem visible={!!editing} item={editing} currentTote={tote} totes={householdTotes} close={() => setEditing(null)} save={item => { onSave({ ...tote, items: tote.items.map(i => i.id === item.id ? item : i), updatedAt: 'Today' }); setEditing(null); }} move={async (item, targetId) => { try { await onMoveItem(item, targetId); setEditing(null); } catch (e: any) { Alert.alert('Could not move item', e.message); } }} remove={async item => { try { await onDeleteItem(item); setEditing(null); } catch (e: any) { Alert.alert('Could not delete item', e.message); } }} /><LabelSheet tote={label} household={household} close={closeLabel} size={labelSize} /></SafeAreaView>;
 }
 
 function Settings({ household, totes, email, profile, labelSize, setLabelSize, openTote, invite, loadMembers, saveProfile, signOut, deleteAccount }: { household: Household; totes: Tote[]; email: string; profile: { name: string; avatar?: string; avatarPath?: string }; labelSize: LabelSize; setLabelSize: (size: LabelSize) => void; openTote: (t: Tote) => void; invite?: (email: string) => Promise<void>; loadMembers?: () => Promise<CloudMember[]>; saveProfile?: (name: string, image?: string) => Promise<void>; signOut: () => void; deleteAccount?: () => void }) {
@@ -301,6 +313,14 @@ function AddItem({ visible, close, add }: { visible: boolean; close: () => void;
   function submit() { if (!name.trim()) return Alert.alert('What is the item called?'); add({ id: `item-${Date.now()}`, name: name.trim(), quantity: quantity.trim() || '1', notes: notes.trim(), image }); setName(''); setQuantity('1'); setNotes(''); setImage(undefined); }
   async function pick() { const chosen = await choosePhoto(); if (chosen) setImage(chosen); }
   return <Sheet visible={visible} close={close} title="Add an item"><Field label="ITEM NAME" value={name} change={setName} placeholder="e.g. Extension cords" /><Field label="QUANTITY" value={quantity} change={setQuantity} placeholder="1" /><Field label="NOTES (OPTIONAL)" value={notes} change={setNotes} placeholder="Color, size, condition..." /><PhotoPicker image={image} pick={pick} remove={() => setImage(undefined)} label="ITEM PHOTO (OPTIONAL)" /><Primary label="Add item" press={submit} /></Sheet>;
+}
+function EditItem({ visible, item, currentTote, totes, close, save, move, remove }: { visible: boolean; item: Item | null; currentTote: Tote; totes: Tote[]; close: () => void; save: (item: Item) => void; move: (item: Item, targetId: string) => Promise<void>; remove: (item: Item) => Promise<void> }) {
+  const [name, setName] = useState(''), [quantity, setQuantity] = useState('1'), [notes, setNotes] = useState(''), [image, setImage] = useState<string>(), [target, setTarget] = useState(''), [busy, setBusy] = useState(false);
+  useEffect(() => { if (item) { setName(item.name); setQuantity(item.quantity); setNotes(item.notes); setImage(item.image); setTarget(''); } }, [item?.id, visible]);
+  if (!item) return null;
+  const activeItem = item;
+  function confirmDelete() { const act = () => { setBusy(true); remove(activeItem).finally(() => setBusy(false)); }; if (Platform.OS === 'web') { if (window.confirm(`Delete “${activeItem.name}”?`)) act(); } else Alert.alert('Delete item?', `Delete “${activeItem.name}”?`, [{ text: 'Cancel' }, { text: 'Delete', style: 'destructive', onPress: act }]); }
+  return <Sheet visible={visible} close={close} title="Edit item"><Field label="ITEM NAME" value={name} change={setName} placeholder="Item name" /><Field label="QUANTITY" value={quantity} change={setQuantity} placeholder="1" /><Field label="NOTES (OPTIONAL)" value={notes} change={setNotes} placeholder="Color, size, condition..." /><PhotoPicker image={image} pick={async () => { const p = await choosePhoto(); if (p) setImage(p); }} remove={() => setImage(undefined)} label="ITEM PHOTO (OPTIONAL)" /><Pressable style={s.fullPrimary} onPress={() => save({ ...item, name: name.trim() || item.name, quantity: quantity.trim() || '1', notes: notes.trim(), image })}><Text style={s.primaryText}>Save changes</Text></Pressable>{totes.length > 1 && <><View style={s.divider} /><Text style={s.fieldLabel}>MOVE TO ANOTHER TOTE</Text>{totes.filter(t => t.id !== currentTote.id).map(t => <Pressable key={t.id} style={[s.moveOption, target === t.id && s.sizeOptionOn]} onPress={() => setTarget(t.id)}><Text style={s.settingTitle}>Tote {String(t.number).padStart(2, '0')} · {t.title}</Text>{target === t.id && <Ionicons name="checkmark-circle" size={22} color={C.teal} />}</Pressable>)}<Pressable style={[s.outline, (!target || busy) && { opacity: .45 }]} disabled={!target || busy} onPress={async () => { setBusy(true); await move({ ...item, name: name.trim() || item.name, quantity: quantity.trim() || '1', notes: notes.trim(), image }, target); setBusy(false); }}><Ionicons name="swap-horizontal" size={19} color={C.teal} /><Text style={s.outlineText}>Move item</Text></Pressable></>}<Pressable style={s.deleteItemButton} disabled={busy} onPress={confirmDelete}><Ionicons name="trash-outline" size={18} color="#A73D32" /><Text style={s.deleteAccountText}>Delete this item</Text></Pressable></Sheet>;
 }
 function PhotoPicker({ image, pick, remove, label }: { image?: string; pick: () => void; remove: () => void; label: string }) {
   return <View style={s.field}><Text style={s.fieldLabel}>{label}</Text>{image ? <View style={s.pickedPhotoWrap}><Image source={{ uri: image }} style={s.pickedPhoto} /><View style={s.photoActions}><Pressable style={s.smallPhotoButton} onPress={pick}><Ionicons name="camera-outline" size={17} color={C.teal} /><Text style={s.smallPhotoText}>Change</Text></Pressable><Pressable style={s.smallPhotoButton} onPress={remove}><Ionicons name="trash-outline" size={17} color={C.coral} /><Text style={[s.smallPhotoText, { color: C.coral }]}>Remove</Text></Pressable></View></View> : <Pressable style={s.photoPicker} onPress={pick}><Ionicons name="image-outline" size={22} color={C.teal} /><View><Text style={s.photoPickerTitle}>Add a photo</Text><Text style={s.photoPickerSub}>Choose one from your device</Text></View></Pressable>}</View>;
@@ -409,4 +429,5 @@ const s = StyleSheet.create({
   divider: { height: 1, backgroundColor: C.line, marginVertical: 18 },
   sizeOption: { backgroundColor: '#fff', padding: 15, borderRadius: 15, borderWidth: 1, borderColor: C.line, marginBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, sizeOptionOn: { borderColor: C.teal, backgroundColor: '#F2FAF7' },
   printNote: { backgroundColor: C.pale, padding: 15, borderRadius: 15, flexDirection: 'row', gap: 11, marginTop: 10, marginBottom: 8 }, printNoteText: { flex: 1, color: C.ink, fontSize: 12, lineHeight: 18 }, printHint: { color: C.muted, fontSize: 12, lineHeight: 18, textAlign: 'center', marginBottom: 14 },
+  moveOption: { backgroundColor: '#fff', minHeight: 45, paddingHorizontal: 13, borderRadius: 13, borderWidth: 1, borderColor: C.line, marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, deleteItemButton: { height: 44, marginTop: 18, flexDirection: 'row', gap: 7, alignItems: 'center', justifyContent: 'center' },
 });

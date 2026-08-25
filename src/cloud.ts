@@ -105,6 +105,13 @@ export async function saveCloudTote(userId: string, tote: CloudTote) {
   return mapTote(data);
 }
 
+export async function deleteCloudItem(itemId: string, imagePath?: string) {
+  if (!supabase) throw new Error('Cloud connection unavailable');
+  const { error } = await supabase.from('items').delete().eq('id', itemId);
+  if (error) throw error;
+  if (imagePath) await supabase.storage.from('tote-photos').remove([imagePath]);
+}
+
 export async function createCloudHousehold(name: string) {
   if (!supabase) throw new Error('Cloud connection unavailable');
   const { data, error } = await supabase.rpc('create_household', { household_name: name });
