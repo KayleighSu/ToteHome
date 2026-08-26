@@ -6,6 +6,7 @@ export type CloudItem = { id: string; name: string; quantity: string; notes: str
 export type CloudTote = { id: string; householdId: string; number: number; title: string; location: string; detail: string; color: string; image?: string; imagePath?: string; items: CloudItem[]; updatedAt: string };
 export type CloudMember = { userId: string; name: string; email: string; role: string; avatar?: string; avatarPath?: string };
 export type CloudPerson = { userId: string; name: string; username: string; avatar?: string };
+export type CloudSuggestion = { id: string; name: string; username?: string; message: string; status: string; createdAt: string };
 
 const palette = ['#79A9A0', '#B99BC6', '#ED805F', '#EAB65B'];
 const isUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
@@ -204,4 +205,23 @@ export async function createCloudInviteForUser(householdId: string, userId: stri
   const { data, error } = await supabase.rpc('create_household_invite_for_user', { target_household: householdId, target_user: userId });
   if (error) throw error;
   return data as string;
+}
+
+export async function submitCloudSuggestion(userId: string, name: string, username: string | undefined, message: string) {
+  if (!supabase) throw new Error('Cloud connection unavailable');
+  const { error } = await supabase.from('suggestions').insert({ user_id: userId, display_name: name || 'ToteHome user', username: username || null, message: message.trim() });
+  if (error) throw error;
+}
+
+export async function loadCloudSuggestions(): Promise<CloudSuggestion[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from('suggestions').select('id,display_name,username,message,status,created_at').order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data || []).map((row: any) => ({ id: row.id, name: row.display_name, username: row.username || undefined, message: row.message, status: row.status, createdAt: new Date(row.created_at).toLocaleDateString() }));
+}
+
+export async function setSuggestionStatus(id: string, status: 'new' | 'reviewed' | 'done') {
+  if (!supabase) return;
+  const { error } = await supabase.from('suggestions').update({ status }).eq('id', id);
+  if (error) throw error;
 }
