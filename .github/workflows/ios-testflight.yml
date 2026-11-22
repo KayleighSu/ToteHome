@@ -43,7 +43,7 @@ jobs:
           test -n "$EXPO_PUBLIC_SUPABASE_URL" && test -n "$EXPO_PUBLIC_SUPABASE_ANON_KEY" || { echo "::error::Missing Supabase configuration"; exit 1; }
           npm ci
           # Remove the web-only base URL from the ephemeral native build checkout.
-          node -e 'const fs=require("fs"); const p="app.json"; const c=JSON.parse(fs.readFileSync(p,"utf8")); if(c.expo.experiments) delete c.expo.experiments.baseUrl; fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");'
+          node -e 'const fs=require("fs"); const p="app.json"; const c=JSON.parse(fs.readFileSync(p,"utf8")); if(c.expo.experiments) delete c.expo.experiments.baseUrl; c.expo.ios.buildNumber=process.env.GITHUB_RUN_NUMBER; fs.writeFileSync(p,JSON.stringify(c,null,2)+"\n");'
           npx expo prebuild --platform ios --no-install
           cd ios
           pod install
@@ -110,6 +110,7 @@ jobs:
           <plist version="1.0"><dict>
           <key>method</key><string>app-store-connect</string>
           <key>signingStyle</key><string>manual</string>
+          <key>manageAppVersionAndBuildNumber</key><false/>
           <key>teamID</key><string>$APPLE_TEAM_ID</string>
           <key>provisioningProfiles</key><dict>
           <key>com.totehome.app</key><string>$PROFILE_NAME</string>
@@ -119,6 +120,13 @@ jobs:
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/ToteHome.xcarchive" \
             -exportPath "$RUNNER_TEMP/ToteHomeExport" -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
           ls -l "$RUNNER_TEMP/ToteHomeExport/"*.ipa
+          mkdir -p "$RUNNER_TEMP/verify-ipa"
+          unzip -q "$RUNNER_TEMP/ToteHomeExport/"*.ipa -d "$RUNNER_TEMP/verify-ipa"
+          APP_PLIST=$(find "$RUNNER_TEMP/verify-ipa/Payload" -maxdepth 2 -name Info.plist -print -quit)
+          test -n "$APP_PLIST"
+          ACTUAL_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PLIST")
+          echo "Exported build number: $ACTUAL_BUILD (expected $GITHUB_RUN_NUMBER)"
+          if [ "$ACTUAL_BUILD" != "$GITHUB_RUN_NUMBER" ]; then echo "::error::Unexpected exported build number"; exit 1; fi
       - name: Upload signed build to App Store Connect
         shell: bash
         run: |
