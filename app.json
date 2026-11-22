@@ -5,7 +5,7 @@
     "scheme": "totehome",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/ToteHome-icon.png",
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
@@ -25,7 +25,7 @@
       "package": "com.totehome.app"
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/ToteHome-icon.png",
       "name": "ToteHome",
       "shortName": "ToteHome",
       "themeColor": "#18332F",
